@@ -3,7 +3,7 @@ import logging
 import os
 import random
 import sys
-from typing import Optional
+from typing import Optional, Dict
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ChatMemberStatus, ParseMode
@@ -15,7 +15,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@dod_mayak")  # в коде не используется, но оставлено для совместимости
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@dod_mayak")  # не используется
 GROUP_ID = int(os.getenv("GROUP_ID", "-1002601127053"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")      # если пусто – polling
 WEBHOOK_PATH = "/webhook"
@@ -36,20 +36,16 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-
+message_map: Dict[int, int] = {}
 
 def generate_alias() -> str:
     return f"Маячок{random.randint(1, 999)}"
 
-
 async def is_admin_or_channel(message: Message) -> bool:
-    # Сообщение от канала (анонимный админ)
     if message.from_user is None:
         return True
-    # Сообщение от бота
     if message.from_user.is_bot:
         return True
-
     try:
         member = await bot.get_chat_member(
             chat_id=message.chat.id,
@@ -59,9 +55,7 @@ async def is_admin_or_channel(message: Message) -> bool:
             return True
     except Exception as e:
         logger.warning(f"Не удалось проверить статус: {e}")
-
     return False
-
 
 async def delete_message_safe(chat_id: int, message_id: int):
     try:
@@ -69,144 +63,161 @@ async def delete_message_safe(chat_id: int, message_id: int):
         logger.debug(f"Сообщение {message_id} удалено")
     except TelegramBadRequest as e:
         if "message to delete not found" in str(e).lower():
-            logger.debug(f"Сообщение {message_id} уже было удалено")
+            logger.debug(f"Сообщение {message_id} уже удалено")
         else:
-            logger.error(f"Ошибка удаления сообщения {message_id}: {e}")
+            logger.error(f"Ошибка удаления {message_id}: {e}")
     except Exception as e:
         logger.error(f"Неизвестная ошибка при удалении {message_id}: {e}")
 
-
-async def resend_message(message: Message, alias: str):
-    # Параметры для ответа (если оригинал был ответом)
-    reply_params = None
-    if message.reply_to_message:
-        reply_params = ReplyParameters(message_id=message.reply_to_message.message_id)
+async def resend_message(message: Message, alias: str, reply_to: Optional[int] = None) -> Optional[Message]:
+    """
+    Переотправляем сообщение от имени бота.
+    :param message: оригинальное сообщение
+    :param alias: псевдоним
+    :param reply_to: ID сообщения бота, на которое нужно ответить (если это ответ)
+    :return: отправленное сообщение или None при ошибке
+    """
+    reply_params = ReplyParameters(message_id=reply_to) if reply_to else None
 
     try:
-        # 1. Текст
+        # Текст
         if message.text:
             text = f"<b>{alias}</b>\n{message.text}"
-            await bot.send_message(
+            return await bot.send_message(
                 chat_id=message.chat.id,
                 text=text,
                 reply_parameters=reply_params,
                 disable_web_page_preview=True,
             )
 
-        # 2. Фото
+        # Фото
         elif message.photo:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
-            await bot.send_photo(
+            return await bot.send_photo(
                 chat_id=message.chat.id,
                 photo=message.photo[-1].file_id,
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
 
-        # 3. Видео
+        # Видео
         elif message.video:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
-            await bot.send_video(
+            return await bot.send_video(
                 chat_id=message.chat.id,
                 video=message.video.file_id,
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
 
-        # 4. Стикер
+        # Стикер
         elif message.sticker:
-            await bot.send_sticker(
+            return await bot.send_sticker(
                 chat_id=message.chat.id,
                 sticker=message.sticker.file_id,
                 reply_parameters=reply_params,
             )
 
-        # 5. Голосовое сообщение
+        # Голосовое
         elif message.voice:
-            await bot.send_voice(
+            return await bot.send_voice(
                 chat_id=message.chat.id,
                 voice=message.voice.file_id,
                 reply_parameters=reply_params,
             )
 
-        # 6. Кружок
+        # Кружок
         elif message.video_note:
-            await bot.send_video_note(
+            return await bot.send_video_note(
                 chat_id=message.chat.id,
                 video_note=message.video_note.file_id,
                 reply_parameters=reply_params,
             )
 
-        # 7. Документ
+        # Документ
         elif message.document:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
-            await bot.send_document(
+            return await bot.send_document(
                 chat_id=message.chat.id,
                 document=message.document.file_id,
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
 
-
-        # 8. Аудио
+        # Аудио
         elif message.audio:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
-            await bot.send_audio(
+            return await bot.send_audio(
                 chat_id=message.chat.id,
                 audio=message.audio.file_id,
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
 
-        # 9. GIF
+        # GIF
         elif message.animation:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
-            await bot.send_animation(
+            return await bot.send_animation(
                 chat_id=message.chat.id,
                 animation=message.animation.file_id,
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
 
-        # 10. Местоположение
+        # Местоположение
         elif message.location:
-            await bot.send_location(
+            return await bot.send_location(
                 chat_id=message.chat.id,
                 latitude=message.location.latitude,
                 longitude=message.location.longitude,
                 reply_parameters=reply_params,
             )
 
-        # 11. Контакт
+        # Контакт
         elif message.contact:
-            await bot.send_contact(
+            return await bot.send_contact(
                 chat_id=message.chat.id,
                 phone_number=message.contact.phone_number,
                 first_name=message.contact.first_name,
                 reply_parameters=reply_params,
             )
 
+        # Опрос (poll)
+        elif message.poll:
+            return await bot.send_poll(
+                chat_id=message.chat.id,
+                question=message.poll.question,
+                options=[opt.text for opt in message.poll.options],
+                is_anonymous=message.poll.is_anonymous,
+                type=message.poll.type,
+                allows_multiple_answers=message.poll.allows_multiple_answers,
+                correct_option_id=message.poll.correct_option_id,
+                explanation=message.poll.explanation,
+                reply_parameters=reply_params,
+            )
 
         else:
             logger.debug(f"Неподдерживаемый тип контента: {message.content_type}")
+            return None
 
     except Exception as e:
         logger.error(f"Ошибка при переотправке сообщения: {e}")
+        return None
 
 
 @router.message(F.chat.id == GROUP_ID)
 async def handle_group_message(message: Message):
     """
-    Обрабатывает любое сообщение в привязанной группе:
-    - игнорирует сообщения от самого бота (чтобы не зациклиться);
-    - игнорирует админов/ботов/каналы;
-    - удаляет оригинал;
-    - переотправляет с псевдонимом.
+    Обрабатывает сообщения в группе:
+    1. Игнорирует бота, админов, канал.
+    2. Определяет, на какое анонимное сообщение нужно ответить (если это reply).
+    3. Отправляет анонимную копию.
+    4. При успехе удаляет оригинал и сохраняет маппинг.
     """
     if message.from_user and message.from_user.id == bot.id:
         return
@@ -215,26 +226,37 @@ async def handle_group_message(message: Message):
         logger.debug("Сообщение от админа/бота/канала — игнорируем")
         return
 
-    await delete_message_safe(message.chat.id, message.message_id)
+    # Определяем reply_to: если это ответ, ищем анонимный ID в маппинге
+    reply_to = None
+    if message.reply_to_message:
+        orig_reply_id = message.reply_to_message.message_id
+        reply_to = message_map.get(orig_reply_id)
+        if reply_to is None:
+            # Возможно, оригинал не был анонимизирован (например, сообщение админа)
+            # Тогда отвечаем без привязки
+            logger.debug(f"Не найден анонимный ID для {orig_reply_id}, ответ будет без reply")
 
     alias = generate_alias()
-    await resend_message(message, alias)
-    logger.info(f"Сообщение от {message.from_user.id} переотправлено как {alias}")
+    sent_message = await resend_message(message, alias, reply_to)
 
+    if sent_message:
+        await delete_message_safe(message.chat.id, message.message_id)
+        # Сохраняем маппинг оригинал -> анонимное сообщение
+        message_map[message.message_id] = sent_message.message_id
+        logger.info(f"Сообщение {message.message_id} от {message.from_user.id} -> {sent_message.message_id} ({alias})")
+    else:
+        logger.error(f"Не удалось отправить анонимное сообщение для {message.message_id}, оригинал не удалён")
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer("Бот для анонимизации активен")
 
-
 async def on_shutdown():
     logger.info("Завершение работы...")
     await bot.session.close()
 
-
 async def main():
     if WEBHOOK_URL:
-        # Webhook-режим
         logger.info("Запуск в режиме Webhook")
         await bot.set_webhook(f"{WEBHOOK_URL}{WEBHOOK_PATH}")
         app = web.Application()
@@ -248,13 +270,10 @@ async def main():
         await site.start()
 
         logger.info(f"Webhook установлен на {WEBHOOK_URL}{WEBHOOK_PATH}")
-        # Бесконечное ожидание
         await asyncio.Event().wait()
     else:
-        # Polling-режим (для локального тестирования)
         logger.info("Запуск в режиме Polling")
         await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     try:
