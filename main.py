@@ -232,15 +232,36 @@ async def handle_group_message(message: Message):
         logger.debug("Сообщение от админа/бота/канала — игнорируем")
         return
 
+@router.message(F.chat.id == GROUP_ID)
+async def handle_group_message(message: Message):
+    """
+    Обрабатывает сообщения в группе:
+    1. Игнорирует бота, админов, канал.
+    2. Определяет, на какое анонимное сообщение нужно ответить (если это reply).
+    3. Отправляет анонимную копию.
+    4. При успехе удаляет оригинал и сохраняет маппинг.
+    """
+    if message.from_user and message.from_user.id == bot.id:
+        return
+
+    if await is_admin_or_channel(message):
+        logger.debug("Сообщение от админа/бота/канала — игнорируем")
+        return
+
     # Определяем reply_to: если это ответ, ищем анонимный ID в маппинге
     reply_to = None
     if message.reply_to_message:
         orig_reply_id = message.reply_to_message.message_id
+        # Сначала ищем в маппинге анонимных сообщений (ответ на другой комментарий)
         reply_to = message_map.get(orig_reply_id)
         if reply_to is None:
-            # Возможно, оригинал не был анонимизирован (например, сообщение админа)
-            # Тогда отвечаем без привязки
-            logger.debug(f"Не найден анонимный ID для {orig_reply_id}, ответ будет без reply")
+            # Если не нашли, проверяем, не является ли сообщение постом из канала
+            if message.reply_to_message.forward_from_chat:
+                # Это комментарий к посту, используем ID сообщения-поста как reply_to
+                reply_to = orig_reply_id
+                logger.debug(f"Ответ на пост канала, reply_to = {reply_to}")
+            else:
+                logger.debug(f"Не найден анонимный ID для {orig_reply_id}, ответ будет без reply")
 
     alias = generate_alias()
     sent_message = await resend_message(message, alias, reply_to)
