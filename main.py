@@ -42,10 +42,15 @@ def generate_alias() -> str:
     return f"Маячок{random.randint(1, 999)}"
 
 async def is_admin_or_channel(message: Message) -> bool:
+    if message.sender_chat is not None:
+        return True
+
     if message.from_user is None:
         return True
+
     if message.from_user.is_bot:
         return True
+
     try:
         member = await bot.get_chat_member(
             chat_id=message.chat.id,
@@ -55,6 +60,7 @@ async def is_admin_or_channel(message: Message) -> bool:
             return True
     except Exception as e:
         logger.warning(f"Не удалось проверить статус: {e}")
+
     return False
 
 async def delete_message_safe(chat_id: int, message_id: int):
