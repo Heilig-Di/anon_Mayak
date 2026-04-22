@@ -14,8 +14,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
+# ---------- Конфигурация ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@dod_mayak")  # не используется
 GROUP_ID = int(os.getenv("GROUP_ID", "-1002601127053"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")      # если пусто – polling
 WEBHOOK_PATH = "/webhook"
@@ -36,37 +36,46 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+# Хранилище маппинга оригинал -> анонимное сообщение
 message_map: Dict[int, int] = {}
 
 def generate_alias() -> str:
     return f"Маячок{random.randint(1, 999)}"
 
 async def is_admin_or_channel(message: Message) -> bool:
+    """Возвращает True, если сообщение от канала, анонимного админа, бота или администратора группы."""
+    # Сообщение от канала (анонимный админ)
     if message.sender_chat is not None:
+        logger.debug("Сообщение от sender_chat (канал/анонимный админ)")
         return True
-
+    # Если from_user отсутствует (редкий случай)
     if message.from_user is None:
+        logger.debug("Сообщение без from_user")
         return True
-
+    # Сообщение от бота
     if message.from_user.is_bot:
+        logger.debug("Сообщение от бота")
         return True
 
+    # Проверяем статус в чате
     try:
         member = await bot.get_chat_member(
             chat_id=message.chat.id,
             user_id=message.from_user.id,
         )
         if member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+            logger.debug(f"Пользователь {message.from_user.id} — администратор")
             return True
     except Exception as e:
-        logger.warning(f"Не удалось проверить статус: {e}")
+        logger.warning(f"Не удалось проверить статус пользователя {message.from_user.id}: {e}")
 
     return False
 
 async def delete_message_safe(chat_id: int, message_id: int):
+    """Безопасное удаление сообщения."""
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        logger.debug(f"Сообщение {message_id} удалено")
+        logger.info(f"Сообщение {message_id} удалено")
     except TelegramBadRequest as e:
         if "message to delete not found" in str(e).lower():
             logger.debug(f"Сообщение {message_id} уже удалено")
@@ -76,13 +85,7 @@ async def delete_message_safe(chat_id: int, message_id: int):
         logger.error(f"Неизвестная ошибка при удалении {message_id}: {e}")
 
 async def resend_message(message: Message, alias: str, reply_to: Optional[int] = None) -> Optional[Message]:
-    """
-    Переотправляем сообщение от имени бота.
-    :param message: оригинальное сообщение
-    :param alias: псевдоним
-    :param reply_to: ID сообщения бота, на которое нужно ответить (если это ответ)
-    :return: отправленное сообщение или None при ошибке
-    """
+    """Переотправляет сообщение от имени бота с сохранением типа контента и reply-связи."""
     reply_params = ReplyParameters(message_id=reply_to) if reply_to else None
 
     try:
@@ -95,7 +98,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 reply_parameters=reply_params,
                 disable_web_page_preview=True,
             )
-
         # Фото
         elif message.photo:
             caption = message.caption or ""
@@ -106,7 +108,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-
         # Видео
         elif message.video:
             caption = message.caption or ""
@@ -117,7 +118,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-
         # Стикер
         elif message.sticker:
             return await bot.send_sticker(
@@ -125,7 +125,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 sticker=message.sticker.file_id,
                 reply_parameters=reply_params,
             )
-
         # Голосовое
         elif message.voice:
             return await bot.send_voice(
@@ -133,7 +132,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 voice=message.voice.file_id,
                 reply_parameters=reply_params,
             )
-
         # Кружок
         elif message.video_note:
             return await bot.send_video_note(
@@ -141,7 +139,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 video_note=message.video_note.file_id,
                 reply_parameters=reply_params,
             )
-
         # Документ
         elif message.document:
             caption = message.caption or ""
@@ -152,7 +149,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-
         # Аудио
         elif message.audio:
             caption = message.caption or ""
@@ -163,8 +159,7 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-
-        # GIF
+        # Анимация
         elif message.animation:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
@@ -174,7 +169,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-
         # Местоположение
         elif message.location:
             return await bot.send_location(
@@ -183,7 +177,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 longitude=message.location.longitude,
                 reply_parameters=reply_params,
             )
-
         # Контакт
         elif message.contact:
             return await bot.send_contact(
@@ -192,8 +185,7 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 first_name=message.contact.first_name,
                 reply_parameters=reply_params,
             )
-
-        # Опрос (poll)
+        # Опрос
         elif message.poll:
             return await bot.send_poll(
                 chat_id=message.chat.id,
@@ -206,73 +198,53 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 explanation=message.poll.explanation,
                 reply_parameters=reply_params,
             )
-
         else:
             logger.debug(f"Неподдерживаемый тип контента: {message.content_type}")
             return None
-
     except Exception as e:
         logger.error(f"Ошибка при переотправке сообщения: {e}")
         return None
 
-
+# ---------- ЕДИНСТВЕННЫЙ ОБРАБОТЧИК СООБЩЕНИЙ ----------
 @router.message(F.chat.id == GROUP_ID)
 async def handle_group_message(message: Message):
-    """
-    Обрабатывает сообщения в группе:
-    1. Игнорирует бота, админов, канал.
-    2. Определяет, на какое анонимное сообщение нужно ответить (если это reply).
-    3. Отправляет анонимную копию.
-    4. При успехе удаляет оригинал и сохраняет маппинг.
-    """
+    """Обрабатывает сообщения в группе обсуждения."""
+    logger.info(f"Получено сообщение {message.message_id} от {message.from_user.id if message.from_user else 'канала'}")
+
+    # Игнорируем собственные сообщения бота
     if message.from_user and message.from_user.id == bot.id:
+        logger.debug("Сообщение от бота — игнорируем")
         return
 
+    # Игнорируем админов, каналы, ботов
     if await is_admin_or_channel(message):
-        logger.debug("Сообщение от админа/бота/канала — игнорируем")
+        logger.info("Сообщение от админа/канала/бота — игнорируем")
         return
 
-@router.message(F.chat.id == GROUP_ID)
-async def handle_group_message(message: Message):
-    """
-    Обрабатывает сообщения в группе:
-    1. Игнорирует бота, админов, канал.
-    2. Определяет, на какое анонимное сообщение нужно ответить (если это reply).
-    3. Отправляет анонимную копию.
-    4. При успехе удаляет оригинал и сохраняет маппинг.
-    """
-    if message.from_user and message.from_user.id == bot.id:
-        return
-
-    if await is_admin_or_channel(message):
-        logger.debug("Сообщение от админа/бота/канала — игнорируем")
-        return
-
-    # Определяем reply_to: если это ответ, ищем анонимный ID в маппинге
+    # Определяем reply_to
     reply_to = None
     if message.reply_to_message:
         orig_reply_id = message.reply_to_message.message_id
-        # Сначала ищем в маппинге анонимных сообщений (ответ на другой комментарий)
+        # Ищем анонимный ID в маппинге (ответ на другой комментарий)
         reply_to = message_map.get(orig_reply_id)
         if reply_to is None:
-            # Если не нашли, проверяем, не является ли сообщение постом из канала
+            # Если не нашли, проверяем, не пост ли это из канала
             if message.reply_to_message.forward_from_chat:
-                # Это комментарий к посту, используем ID сообщения-поста как reply_to
                 reply_to = orig_reply_id
-                logger.debug(f"Ответ на пост канала, reply_to = {reply_to}")
+                logger.info(f"Ответ на пост канала, reply_to = {reply_to}")
             else:
-                logger.debug(f"Не найден анонимный ID для {orig_reply_id}, ответ будет без reply")
+                logger.info(f"Не найден анонимный ID для {orig_reply_id}, ответ будет без привязки")
 
     alias = generate_alias()
+    logger.info(f"Отправляем анонимную копию от {alias}")
     sent_message = await resend_message(message, alias, reply_to)
 
     if sent_message:
         await delete_message_safe(message.chat.id, message.message_id)
-        # Сохраняем маппинг оригинал -> анонимное сообщение
         message_map[message.message_id] = sent_message.message_id
-        logger.info(f"Сообщение {message.message_id} от {message.from_user.id} -> {sent_message.message_id} ({alias})")
+        logger.info(f"✅ Сообщение {message.message_id} -> {sent_message.message_id} ({alias})")
     else:
-        logger.error(f"Не удалось отправить анонимное сообщение для {message.message_id}, оригинал не удалён")
+        logger.error(f"❌ Не удалось отправить анонимное сообщение для {message.message_id}, оригинал не удалён")
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
