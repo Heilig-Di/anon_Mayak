@@ -17,7 +17,7 @@ from aiohttp import web
 # ---------- Конфигурация ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID", "-1002601127053"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")      # если пусто – polling
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 WEBHOOK_PATH = "/webhook"
 PORT = int(os.getenv("PORT", 8000))
 
@@ -39,25 +39,24 @@ dp.include_router(router)
 # Хранилище маппинга оригинал -> анонимное сообщение
 message_map: Dict[int, int] = {}
 
+# ИЗМЕНЕНИЕ 1: глобальная очередь для отправки сообщений
+send_queue: asyncio.Queue = asyncio.Queue()
+
+
 def generate_alias() -> str:
     return f"Маячок{random.randint(1, 999)}"
 
+
 async def is_admin_or_channel(message: Message) -> bool:
-    """Возвращает True, если сообщение от канала, анонимного админа, бота или администратора группы."""
-    # Сообщение от канала (анонимный админ)
     if message.sender_chat is not None:
         logger.debug("Сообщение от sender_chat (канал/анонимный админ)")
         return True
-    # Если from_user отсутствует (редкий случай)
     if message.from_user is None:
         logger.debug("Сообщение без from_user")
         return True
-    # Сообщение от бота
     if message.from_user.is_bot:
         logger.debug("Сообщение от бота")
         return True
-
-    # Проверяем статус в чате
     try:
         member = await bot.get_chat_member(
             chat_id=message.chat.id,
@@ -68,11 +67,10 @@ async def is_admin_or_channel(message: Message) -> bool:
             return True
     except Exception as e:
         logger.warning(f"Не удалось проверить статус пользователя {message.from_user.id}: {e}")
-
     return False
 
+
 async def delete_message_safe(chat_id: int, message_id: int):
-    """Безопасное удаление сообщения."""
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logger.info(f"Сообщение {message_id} удалено")
@@ -84,12 +82,10 @@ async def delete_message_safe(chat_id: int, message_id: int):
     except Exception as e:
         logger.error(f"Неизвестная ошибка при удалении {message_id}: {e}")
 
-async def resend_message(message: Message, alias: str, reply_to: Optional[int] = None) -> Optional[Message]:
-    """Переотправляет сообщение от имени бота с сохранением типа контента и reply-связи."""
-    reply_params = ReplyParameters(message_id=reply_to) if reply_to else None
 
+async def resend_message(message: Message, alias: str, reply_to: Optional[int] = None) -> Optional[Message]:
+    reply_params = ReplyParameters(message_id=reply_to) if reply_to else None
     try:
-        # Текст
         if message.text:
             text = f"<b>{alias}</b>\n{message.text}"
             return await bot.send_message(
@@ -98,7 +94,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 reply_parameters=reply_params,
                 disable_web_page_preview=True,
             )
-        # Фото
         elif message.photo:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
@@ -108,7 +103,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-        # Видео
         elif message.video:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
@@ -118,28 +112,24 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-        # Стикер
         elif message.sticker:
             return await bot.send_sticker(
                 chat_id=message.chat.id,
                 sticker=message.sticker.file_id,
                 reply_parameters=reply_params,
             )
-        # Голосовое
         elif message.voice:
             return await bot.send_voice(
                 chat_id=message.chat.id,
                 voice=message.voice.file_id,
                 reply_parameters=reply_params,
             )
-        # Кружок
         elif message.video_note:
             return await bot.send_video_note(
                 chat_id=message.chat.id,
                 video_note=message.video_note.file_id,
                 reply_parameters=reply_params,
             )
-        # Документ
         elif message.document:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
@@ -149,7 +139,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-        # Аудио
         elif message.audio:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
@@ -159,7 +148,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-        # Анимация
         elif message.animation:
             caption = message.caption or ""
             new_caption = f"<b>{alias}</b>\n{caption}" if caption else ""
@@ -169,7 +157,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 caption=new_caption,
                 reply_parameters=reply_params,
             )
-        # Местоположение
         elif message.location:
             return await bot.send_location(
                 chat_id=message.chat.id,
@@ -177,7 +164,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 longitude=message.location.longitude,
                 reply_parameters=reply_params,
             )
-        # Контакт
         elif message.contact:
             return await bot.send_contact(
                 chat_id=message.chat.id,
@@ -185,7 +171,6 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
                 first_name=message.contact.first_name,
                 reply_parameters=reply_params,
             )
-        # Опрос
         elif message.poll:
             return await bot.send_poll(
                 chat_id=message.chat.id,
@@ -205,30 +190,52 @@ async def resend_message(message: Message, alias: str, reply_to: Optional[int] =
         logger.error(f"Ошибка при переотправке сообщения: {e}")
         return None
 
-# ---------- ЕДИНСТВЕННЫЙ ОБРАБОТЧИК СООБЩЕНИЙ ----------
+
+# ИЗМЕНЕНИЕ 2: фоновый воркер, который обрабатывает очередь по одной задаче
+async def sender_worker():
+    """
+    Берёт задачи из очереди и обрабатывает их строго по одной
+    с паузой 1 секунда, чтобы не превышать лимиты Telegram и не ловить 429.
+    """
+    logger.info("Sender worker запущен")
+    while True:
+        try:
+            message, alias, reply_to = await send_queue.get()
+            sent_message = await resend_message(message, alias, reply_to)
+
+            if sent_message:
+                await delete_message_safe(message.chat.id, message.message_id)
+                message_map[message.message_id] = sent_message.message_id
+                logger.info(f"✅ Сообщение {message.message_id} -> {sent_message.message_id} ({alias})")
+            else:
+                logger.error(f"❌ Не удалось отправить для {message.message_id}, оригинал не удалён")
+
+            # Пауза между отправками — ключевой момент против 429
+            await asyncio.sleep(1.0)
+            send_queue.task_done()
+        except Exception as e:
+            logger.error(f"Ошибка в sender_worker: {e}")
+            await asyncio.sleep(1.0)
+
+
+# ---------- Обработчик сообщений ----------
 @router.message(F.chat.id == GROUP_ID)
 async def handle_group_message(message: Message):
-    """Обрабатывает сообщения в группе обсуждения."""
     logger.info(f"Получено сообщение {message.message_id} от {message.from_user.id if message.from_user else 'канала'}")
 
-    # Игнорируем собственные сообщения бота
     if message.from_user and message.from_user.id == bot.id:
         logger.debug("Сообщение от бота — игнорируем")
         return
 
-    # Игнорируем админов, каналы, ботов
     if await is_admin_or_channel(message):
         logger.info("Сообщение от админа/канала/бота — игнорируем")
         return
 
-    # Определяем reply_to
     reply_to = None
     if message.reply_to_message:
         orig_reply_id = message.reply_to_message.message_id
-        # Ищем анонимный ID в маппинге (ответ на другой комментарий)
         reply_to = message_map.get(orig_reply_id)
         if reply_to is None:
-            # Если не нашли, проверяем, не пост ли это из канала
             if message.reply_to_message.forward_from_chat:
                 reply_to = orig_reply_id
                 logger.info(f"Ответ на пост канала, reply_to = {reply_to}")
@@ -236,28 +243,36 @@ async def handle_group_message(message: Message):
                 logger.info(f"Не найден анонимный ID для {orig_reply_id}, ответ будет без привязки")
 
     alias = generate_alias()
-    logger.info(f"Отправляем анонимную копию от {alias}")
-    sent_message = await resend_message(message, alias, reply_to)
+    logger.info(f"Ставим в очередь отправку от {alias}")
 
-    if sent_message:
-        await delete_message_safe(message.chat.id, message.message_id)
-        message_map[message.message_id] = sent_message.message_id
-        logger.info(f"✅ Сообщение {message.message_id} -> {sent_message.message_id} ({alias})")
-    else:
-        logger.error(f"❌ Не удалось отправить анонимное сообщение для {message.message_id}, оригинал не удалён")
+    # ИЗМЕНЕНИЕ 3: кладём задачу в очередь, а не вызываем resend_message напрямую
+    await send_queue.put((message, alias, reply_to))
+
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer("Бот для анонимизации активен")
 
+
 async def on_shutdown():
     logger.info("Завершение работы...")
     await bot.session.close()
 
+
 async def main():
     if WEBHOOK_URL:
         logger.info("Запуск в режиме Webhook")
-        await bot.set_webhook(f"{WEBHOOK_URL}{WEBHOOK_PATH}")
+
+        # ИЗМЕНЕНИЕ 4: сбрасываем старый вебхук и накопленные обновления
+        await bot.delete_webhook(drop_pending_updates=True)
+
+        # Ставим вебхук с ограничением соединений до 1 — критично для Render Free
+        await bot.set_webhook(
+            f"{WEBHOOK_URL}{WEBHOOK_PATH}",
+            max_connections=1,
+            drop_pending_updates=True,
+        )
+
         app = web.Application()
         webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
         webhook_requests_handler.register(app, path=WEBHOOK_PATH)
@@ -268,11 +283,17 @@ async def main():
         site = web.TCPSite(runner, host="0.0.0.0", port=PORT)
         await site.start()
 
-        logger.info(f"Webhook установлен на {WEBHOOK_URL}{WEBHOOK_PATH}")
+        logger.info(f"Webhook установлен на {WEBHOOK_URL}{WEBHOOK_PATH} (max_connections=1)")
+
+        # запускаем воркер, который будет разгребать очередь
+        asyncio.create_task(sender_worker())
+
         await asyncio.Event().wait()
     else:
         logger.info("Запуск в режиме Polling")
+        asyncio.create_task(sender_worker())
         await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     try:
